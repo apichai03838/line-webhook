@@ -279,7 +279,7 @@ def handle_image(event: MessageEvent):
             (json.dumps(image_ids), json.dumps(drive_ids), job_id),
         )
 
-    push_message(user_id, f"✅ อัปโหลดรูปสำเร็จ (msg{job_id}_{seq}.jpg)\nส่งข้อความมาได้เลย หรือรอ 1 นาทีระบบจะเริ่มทำงานอัตโนมัติ")
+    push_message(user_id, f"✅ อัปโหลดรูปสำเร็จ (รูปที่ {seq})")
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
