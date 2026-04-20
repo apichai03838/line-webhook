@@ -51,6 +51,7 @@ configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 
 def init_db():
     with sqlite3.connect("jobs.db") as conn:
+        conn.execute("DROP TABLE IF EXISTS staging")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS staging (
                 user_id     TEXT PRIMARY KEY,
