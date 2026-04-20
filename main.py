@@ -38,6 +38,7 @@ load_dotenv()
 CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 DRIVE_FOLDER_ID = os.environ["GOOGLE_DRIVE_FOLDER_ID"]
+DRIVE_TEXT_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_TEXT_FOLDER_ID", os.environ["GOOGLE_DRIVE_FOLDER_ID"])
 GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 STAGING_TIMEOUT_SECONDS = 60
 
@@ -111,10 +112,18 @@ def get_drive_service():
 
 
 def upload_image_to_drive(message_id: str, data: bytes) -> str:
-    """Upload image bytes to Drive, return Drive file ID."""
     service = get_drive_service()
     media = MediaInMemoryUpload(data, mimetype="image/jpeg")
     file_meta = {"name": f"image_{message_id}.jpg", "parents": [DRIVE_FOLDER_ID]}
+    result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
+    return result["id"]
+
+
+def upload_text_to_drive(job_id: int, text: str, timestamp: str) -> str:
+    service = get_drive_service()
+    content = f"job_id: {job_id}\ntimestamp: {timestamp}\n\n{text}"
+    media = MediaInMemoryUpload(content.encode("utf-8"), mimetype="text/plain")
+    file_meta = {"name": f"order_job{job_id}_{timestamp[:10]}.txt", "parents": [DRIVE_TEXT_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
     return result["id"]
 
@@ -152,6 +161,10 @@ def flush_staging(user_id: str, text: str | None = None) -> int | None:
         )
         job_id = cursor.lastrowid
         conn.execute("DELETE FROM staging WHERE user_id=?", (user_id,))
+
+    if text:
+        upload_text_to_drive(job_id, text, now)
+
     return job_id
 
 
