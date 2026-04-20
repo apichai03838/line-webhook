@@ -114,16 +114,15 @@ def get_drive_service():
 def upload_image_to_drive(message_id: str, data: bytes) -> str:
     service = get_drive_service()
     media = MediaInMemoryUpload(data, mimetype="image/jpeg")
-    file_meta = {"name": f"image_{message_id}.jpg", "parents": [DRIVE_FOLDER_ID]}
+    file_meta = {"name": f"msg_{message_id}.jpg", "parents": [DRIVE_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
     return result["id"]
 
 
-def upload_text_to_drive(job_id: int, text: str, timestamp: str) -> str:
+def upload_text_to_drive(message_id: str, text: str) -> str:
     service = get_drive_service()
-    content = text
-    media = MediaInMemoryUpload(content.encode("utf-8"), mimetype="text/plain")
-    file_meta = {"name": f"order_job{job_id}_{timestamp[:10]}.txt", "parents": [DRIVE_TEXT_FOLDER_ID]}
+    media = MediaInMemoryUpload(text.encode("utf-8"), mimetype="text/plain")
+    file_meta = {"name": f"msg_{message_id}.txt", "parents": [DRIVE_TEXT_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
     return result["id"]
 
@@ -144,7 +143,7 @@ def push_message(user_id: str, text: str):
 
 # ---------- Staging helpers ----------
 
-def flush_staging(user_id: str, text: str | None = None) -> int | None:
+def flush_staging(user_id: str, text: str | None = None, text_message_id: str | None = None) -> int | None:
     """สร้าง job จาก staging ของ user แล้วเคลียร์ staging"""
     with get_db() as conn:
         row = conn.execute("SELECT * FROM staging WHERE user_id=?", (user_id,)).fetchone()
@@ -162,8 +161,8 @@ def flush_staging(user_id: str, text: str | None = None) -> int | None:
         job_id = cursor.lastrowid
         conn.execute("DELETE FROM staging WHERE user_id=?", (user_id,))
 
-    if text:
-        upload_text_to_drive(job_id, text, now)
+    if text and text_message_id:
+        upload_text_to_drive(text_message_id, text)
 
     return job_id
 
@@ -268,7 +267,7 @@ def handle_text(event: MessageEvent):
         )
 
     # flush staging → สร้าง job
-    job_id = flush_staging(user_id, text=text)
+    job_id = flush_staging(user_id, text=text, text_message_id=event.message.id)
 
     if job_id:
         push_message(user_id, f"🚀 สร้างงาน #{job_id} เรียบร้อย\nกำลังรอ Claude ตรวจสอบ...")
