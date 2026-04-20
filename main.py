@@ -56,6 +56,7 @@ def init_db():
                 user_id     TEXT PRIMARY KEY,
                 image_ids   TEXT NOT NULL DEFAULT '[]',
                 drive_ids   TEXT NOT NULL DEFAULT '[]',
+                image_seq   INTEGER NOT NULL DEFAULT 0,
                 expires_at  TEXT NOT NULL
             )
         """)
@@ -111,18 +112,18 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 
-def upload_image_to_drive(message_id: str, data: bytes) -> str:
+def upload_image_to_drive(job_id: int, seq: int, data: bytes) -> str:
     service = get_drive_service()
     media = MediaInMemoryUpload(data, mimetype="image/jpeg")
-    file_meta = {"name": f"msg_{message_id}.jpg", "parents": [DRIVE_FOLDER_ID]}
+    file_meta = {"name": f"msg{job_id}_{seq}.jpg", "parents": [DRIVE_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
     return result["id"]
 
 
-def upload_text_to_drive(message_id: str, text: str) -> str:
+def upload_text_to_drive(job_id: int, text: str) -> str:
     service = get_drive_service()
     media = MediaInMemoryUpload(text.encode("utf-8"), mimetype="text/plain")
-    file_meta = {"name": f"msg_{message_id}.txt", "parents": [DRIVE_TEXT_FOLDER_ID]}
+    file_meta = {"name": f"msg{job_id}.txt", "parents": [DRIVE_TEXT_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
     return result["id"]
 
@@ -143,26 +144,59 @@ def push_message(user_id: str, text: str):
 
 # ---------- Staging helpers ----------
 
-def flush_staging(user_id: str, text: str | None = None, text_message_id: str | None = None) -> int | None:
-    """สร้าง job จาก staging ของ user แล้วเคลียร์ staging"""
+def get_or_create_job(user_id: str) -> tuple[int, int]:
+    """ดึง job ที่กำลัง staging หรือสร้างใหม่ คืน (job_id, next_seq)"""
+    now = (datetime.utcnow() + timedelta(hours=7)).isoformat()
+    expires_at = (datetime.utcnow() + timedelta(seconds=STAGING_TIMEOUT_SECONDS)).isoformat()
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM staging WHERE user_id=?", (user_id,)).fetchone()
+        if row:
+            seq = row["image_seq"] + 1
+            conn.execute(
+                "UPDATE staging SET image_seq=?, expires_at=? WHERE user_id=?",
+                (seq, expires_at, user_id),
+            )
+            job_id = row["job_id"] if "job_id" in row.keys() else None
+            if not job_id:
+                job_id = conn.execute(
+                    "SELECT id FROM jobs WHERE user_id=? AND status='staging' ORDER BY id DESC LIMIT 1",
+                    (user_id,)
+                ).fetchone()["id"]
+        else:
+            cursor = conn.execute(
+                "INSERT INTO jobs (user_id, text, image_ids, drive_ids, status, created_at) VALUES (?,?,?,?,?,?)",
+                (user_id, None, "[]", "[]", "staging", now),
+            )
+            job_id = cursor.lastrowid
+            seq = 1
+            conn.execute(
+                "INSERT INTO staging (user_id, image_ids, drive_ids, image_seq, expires_at) VALUES (?,?,?,?,?)",
+                (user_id, "[]", "[]", seq, expires_at),
+            )
+    return job_id, seq
+
+
+def flush_staging(user_id: str, text: str | None = None) -> int | None:
+    """mark job เป็น pending และเคลียร์ staging"""
     with get_db() as conn:
         row = conn.execute("SELECT * FROM staging WHERE user_id=?", (user_id,)).fetchone()
         if not row:
             return None
-
-        image_ids = json.loads(row["image_ids"])
-        drive_ids = json.loads(row["drive_ids"])
-
-        now = (datetime.utcnow() + timedelta(hours=7)).isoformat()
-        cursor = conn.execute(
-            "INSERT INTO jobs (user_id, text, image_ids, drive_ids, status, created_at) VALUES (?,?,?,?,?,?)",
-            (user_id, text, json.dumps(image_ids), json.dumps(drive_ids), "pending", now),
+        job_row = conn.execute(
+            "SELECT id FROM jobs WHERE user_id=? AND status='staging' ORDER BY id DESC LIMIT 1",
+            (user_id,)
+        ).fetchone()
+        if not job_row:
+            return None
+        job_id = job_row["id"]
+        conn.execute(
+            "UPDATE jobs SET text=?, status='pending' WHERE id=?",
+            (text, job_id),
         )
-        job_id = cursor.lastrowid
         conn.execute("DELETE FROM staging WHERE user_id=?", (user_id,))
 
-    if text and text_message_id:
-        upload_text_to_drive(text_message_id, text)
+    if text:
+        upload_text_to_drive(job_id, text)
 
     return job_id
 
@@ -180,7 +214,7 @@ def flush_expired_staging():
         job_id = flush_staging(user_id, text=None)
         if job_id:
             print(f"[TIMEOUT] user={user_id} → job #{job_id}")
-            push_message(user_id, f"⏱ หมดเวลารอข้อความ สร้างงานจากรูปที่ส่งมาแล้ว (job #{job_id})")
+            push_message(user_id, f"⏱ หมดเวลารอข้อความ สร้างงานจากรูปที่ส่งมาแล้ว (msg{job_id})")
 
 
 # ---------- Startup ----------
@@ -229,27 +263,23 @@ def handle_image(event: MessageEvent):
     with ApiClient(configuration) as api_client:
         image_bytes = MessagingApiBlob(api_client).get_message_content(message_id)
 
-    # อัปโหลดขึ้น Drive
-    drive_id = upload_image_to_drive(message_id, image_bytes)
-    expires_at = (datetime.utcnow() + timedelta(seconds=STAGING_TIMEOUT_SECONDS)).isoformat()
+    # สร้าง/ดึง job และ seq number
+    job_id, seq = get_or_create_job(user_id)
 
-    # เพิ่มเข้า staging
+    # อัปโหลดขึ้น Drive ชื่อ msg{job_id}_{seq}.jpg
+    drive_id = upload_image_to_drive(job_id, seq, image_bytes)
+
+    # อัปเดต image_ids และ drive_ids ใน job
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM staging WHERE user_id=?", (user_id,)).fetchone()
-        if row:
-            image_ids = json.loads(row["image_ids"]) + [message_id]
-            drive_ids = json.loads(row["drive_ids"]) + [drive_id]
-            conn.execute(
-                "UPDATE staging SET image_ids=?, drive_ids=?, expires_at=? WHERE user_id=?",
-                (json.dumps(image_ids), json.dumps(drive_ids), expires_at, user_id),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO staging (user_id, image_ids, drive_ids, expires_at) VALUES (?,?,?,?)",
-                (user_id, json.dumps([message_id]), json.dumps([drive_id]), expires_at),
-            )
+        job_row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        image_ids = json.loads(job_row["image_ids"]) + [message_id]
+        drive_ids = json.loads(job_row["drive_ids"]) + [drive_id]
+        conn.execute(
+            "UPDATE jobs SET image_ids=?, drive_ids=? WHERE id=?",
+            (json.dumps(image_ids), json.dumps(drive_ids), job_id),
+        )
 
-    push_message(user_id, f"✅ อัปโหลดรูปสำเร็จ ({message_id[:8]}...)\nส่งข้อความมาได้เลย หรือรอ 1 นาทีระบบจะเริ่มทำงานอัตโนมัติ")
+    push_message(user_id, f"✅ อัปโหลดรูปสำเร็จ (msg{job_id}_{seq}.jpg)\nส่งข้อความมาได้เลย หรือรอ 1 นาทีระบบจะเริ่มทำงานอัตโนมัติ")
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
@@ -266,8 +296,8 @@ def handle_text(event: MessageEvent):
             )
         )
 
-    # flush staging → สร้าง job
-    job_id = flush_staging(user_id, text=text, text_message_id=event.message.id)
+    # flush staging → mark job pending
+    job_id = flush_staging(user_id, text=text)
 
     if job_id:
         push_message(user_id, f"🚀 สร้างงาน #{job_id} เรียบร้อย\nกำลังรอ Claude ตรวจสอบ...")
