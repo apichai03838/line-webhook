@@ -113,10 +113,15 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 
+def _timestamp() -> str:
+    return (datetime.utcnow() + timedelta(hours=7)).strftime("%Y%m%d_%H%M")
+
+
 def upload_image_to_drive(job_id: int, seq: int, data: bytes) -> str:
     service = get_drive_service()
     media = MediaInMemoryUpload(data, mimetype="image/jpeg")
-    file_meta = {"name": f"msg{job_id}_{seq}.jpg", "parents": [DRIVE_FOLDER_ID]}
+    name = f"{_timestamp()}_job{job_id}_{seq}.jpg"
+    file_meta = {"name": name, "parents": [DRIVE_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
     return result["id"]
 
@@ -124,7 +129,8 @@ def upload_image_to_drive(job_id: int, seq: int, data: bytes) -> str:
 def upload_text_to_drive(job_id: int, text: str) -> str:
     service = get_drive_service()
     media = MediaInMemoryUpload(text.encode("utf-8"), mimetype="text/plain")
-    file_meta = {"name": f"msg{job_id}.txt", "parents": [DRIVE_TEXT_FOLDER_ID]}
+    name = f"{_timestamp()}_job{job_id}.txt"
+    file_meta = {"name": name, "parents": [DRIVE_TEXT_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
     return result["id"]
 
