@@ -288,20 +288,11 @@ def handle_text(event: MessageEvent):
     user_id = event.source.user_id
     text = event.message.text
 
-    # Reply ทันที
-    with ApiClient(configuration) as api_client:
-        MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text="📝 รับข้อความแล้ว กำลังสร้างงาน...")],
-            )
-        )
-
     # flush staging → mark job pending
     job_id = flush_staging(user_id, text=text)
 
     if job_id:
-        push_message(user_id, f"🚀 สร้างงาน #{job_id} เรียบร้อย\nกำลังรอ Claude ตรวจสอบ...")
+        push_message(user_id, "✅ อัปโหลดเสร็จแล้ว รอ Claude ตรวจสอบสักครู่")
     else:
         push_message(user_id, "⚠️ ยังไม่มีรูปที่ส่งมา กรุณาส่งรูปก่อนแล้วตามด้วยข้อความ")
 
