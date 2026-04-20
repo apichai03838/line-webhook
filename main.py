@@ -154,7 +154,7 @@ def flush_staging(user_id: str, text: str | None = None) -> int | None:
         image_ids = json.loads(row["image_ids"])
         drive_ids = json.loads(row["drive_ids"])
 
-        now = datetime.utcnow().isoformat()
+        now = (datetime.utcnow() + timedelta(hours=7)).isoformat()
         cursor = conn.execute(
             "INSERT INTO jobs (user_id, text, image_ids, drive_ids, status, created_at) VALUES (?,?,?,?,?,?)",
             (user_id, text, json.dumps(image_ids), json.dumps(drive_ids), "pending", now),
