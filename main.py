@@ -329,6 +329,17 @@ def jobs_next():
     }
 
 
+@app.get("/debug/jobs")
+def debug_jobs():
+    with get_db() as conn:
+        jobs = conn.execute("SELECT id, user_id, status, text, created_at FROM jobs ORDER BY id DESC LIMIT 20").fetchall()
+        staging = conn.execute("SELECT * FROM staging").fetchall()
+    return {
+        "jobs": [dict(r) for r in jobs],
+        "staging": [dict(r) for r in staging],
+    }
+
+
 @app.get("/jobs/{job_id}/image/{index}")
 def get_job_image(job_id: int, index: int):
     with get_db() as conn:
