@@ -121,7 +121,7 @@ def upload_image_to_drive(message_id: str, data: bytes) -> str:
 
 def upload_text_to_drive(job_id: int, text: str, timestamp: str) -> str:
     service = get_drive_service()
-    content = f"job_id: {job_id}\ntimestamp: {timestamp}\n\n{text}"
+    content = text
     media = MediaInMemoryUpload(content.encode("utf-8"), mimetype="text/plain")
     file_meta = {"name": f"order_job{job_id}_{timestamp[:10]}.txt", "parents": [DRIVE_TEXT_FOLDER_ID]}
     result = service.files().create(body=file_meta, media_body=media, fields="id").execute()
